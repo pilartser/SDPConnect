@@ -29,17 +29,30 @@ namespace SDPConnect
             {
                 var sdp = new SdpServiceClient() {ClientCredentials = { UserName = { UserName = "admin", Password = "1"}}};
                 
-                var request = new CardInfoRequest()
+                var requestCardInfo = new CardInfoRequest()
                 {
-                    deviceId = "120",
-                    regionId = 62,
+                    deviceId = "99999",
+                    regionId = 99,
                     sysNum = 6060,
-                    agentId = "6666",
-                    salepointId = "1287",
+                    agentId = "1",
+                    salepointId = "1",
                     version = "1"
                 };
-               var test = sdp.CardInfo(request);
-                //sdp.Open();
+                
+               var cardInfoResponse = sdp.CardInfo(requestCardInfo);
+                var requestCardPayment = new CardPaymentRequest()
+                {
+                    agentId = "1",
+                    paymentInfo = "Какой-то платеж",
+                    paymentSum = 200000,
+                    salepointId = "1",
+                    sessionId = cardInfoResponse.CardInformation.sessionId,
+                    tariffId = "12",
+                    version = "1"
+                };
+                tbLog.AppendText(cardInfoResponse.CardInformation.tariff.text);
+                var cardPaymentResponse = sdp.CardPayment(requestCardPayment);
+                tbLog.AppendText(cardPaymentResponse.CardPaymentInformation.fullSum.ToString());
             }
             catch (Exception e)
             {
