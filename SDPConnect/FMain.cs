@@ -3,6 +3,7 @@ using System.Data;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using System.Windows.Forms;
 using SDPConnect.SDPService;
 
@@ -10,11 +11,15 @@ namespace SDPConnect
 {
     public partial class FMain : Form
     {
-        private const char _separator = ';';
+        private Row[] _rows;
+        private bool _isControlAccepted = false;
 
         public FMain()
         {
             InitializeComponent();
+            dgvReestr.DataSource = Row.PrepareDataTable();
+            Row.CustomizeGrid(dgvReestr);
+            CheckChanges();
         }
 
 
@@ -22,9 +27,9 @@ namespace SDPConnect
         {
             try
             {
-                var sdp = new SdpServiceClient() {ClientCredentials = {UserName = {UserName = "admin", Password = "1"}}};
+                var sdp = new SdpServiceClient {ClientCredentials = {UserName = {UserName = "admin", Password = "1"}}};
 
-                var requestCardInfo = new CardInfoRequest()
+                var requestCardInfo = new CardInfoRequest
                 {
                     deviceId = "99999",
                     regionId = 99,
@@ -35,7 +40,7 @@ namespace SDPConnect
                 };
 
                 var cardInfoResponse = sdp.CardInfo(requestCardInfo);
-                var requestCardPayment = new CardPaymentRequest()
+                var requestCardPayment = new CardPaymentRequest
                 {
                     agentId = "1",
                     paymentInfo = "Какой-то платеж",
@@ -68,16 +73,17 @@ namespace SDPConnect
                 if (ofdReestr.ShowDialog(this) != DialogResult.OK) return;
                 var path = ofdReestr.FileName;
                 WriteLog($"Открыт файл: {path}");
-                tbReestrPath.Text = path;
+                _rows = null;
+                ((DataTable)dgvReestr.DataSource)?.Clear();
                 var lines = File.ReadAllLines(path, Encoding.GetEncoding(1251));
                 if (lines.Length == 0) throw new Exception("В реестре не обнаружено ни одной строки");
                 if ((lines.Length < 3) || (lines[lines.Length - 2] != "="))
                     throw new Exception("В реестре не обнаружен признак контрольной строки");
-                var controlLine = lines[lines.Length - 1].Split(_separator);
+                var controlLine = lines[lines.Length - 1].Split(Row.Separator).ToArray();
                 if (controlLine.Length != 6) throw new Exception("В контрольной строке не 6 полей");
                 var payLines = lines.Select((a, i) => new {Value = a, Index = i + 1})
                     .Where(row => (row.Index < lines.Length - 1)).ToList();
-                var brokenLines = payLines.Where(row => row.Value.Split(_separator).Length != 15).ToList();
+                var brokenLines = payLines.Where(row => row.Value.Split(Row.Separator).Length != 15).ToList();
                 if (brokenLines.Any())
                 {
                     foreach (var line in brokenLines)
@@ -87,31 +93,35 @@ namespace SDPConnect
                     throw new Exception(
                         $"При загрузке данных найдены строки, содержащие не 15 полей.");
                 }
-                dgvReestr.DataSource = null;
-
-                var dt = Row.PrepareDataTable();
-                try
+                _rows = payLines.Select(p => new Row(p.Index, p.Value)).ToArray();
+                Row.FillGrid(dgvReestr, _rows);
+                _isControlAccepted = Row.CompareRows(_rows, controlLine);
+                if (_isControlAccepted)
+                    WriteLog("Контрольная строка совпадает с загруженными данными");
+                else
                 {
-                    foreach (var payLine in payLines.Select(p => new Row(index: p.Index, str: p.Value)))
-                    {
-                        payLine.AddTo(dt);
-                    }
+                    WriteLog("Контрольная строка не совпадает с загруженными данными");
+                    MessageBox.Show($"Контрольная строка не совпала с загруженными данными! Для игнорирования этого факта выберите отметьте соответствующий чекбокс.",
+                        $"Предупреждение о несоответствии загруженных данных контрольной строке", MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
                 }
-                catch (Exception e)
-                {
-                    throw new Exception($"Ошибка преобразования данных: {e.Message}");
-                }
-                dgvReestr.DataSource = dt;
-                Row.CustomizeReestrGrid(dgvReestr);
-
                 WriteLog("Загрузка файла успешно завершена");
             }
             catch (Exception e)
             {
+                _rows = null;
                 var errorText = $"При загрузке данных из текстового файла произошла следующая ошибка: {e.Message}";
                 WriteLog(errorText);
                 MessageBox.Show(errorText, $"Сообщение об ошибке", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+            CheckChanges();
+        }
+
+        private void CheckChanges()
+        {
+            bool isRowsExisted = (_rows != null) && (_rows.Length > 0);
+            chbIgnoreControlRow.Visible = (isRowsExisted && (!_isControlAccepted));
+            btnRun.Enabled = (isRowsExisted && (_isControlAccepted || chbIgnoreControlRow.Checked));
         }
 
         private void WriteLog(string line)
@@ -123,12 +133,31 @@ namespace SDPConnect
         //Events
         private void btnRun_Click(object sender, EventArgs e)
         {
-            DoSmth();
+            foreach (var row in _rows)
+            {
+                var dgvRow = dgvReestr.Rows[row.Index - 1];
+                WriteLog($"Отправляем сервису строку {row.Id} для оплаты {row.PaymentSum} по карте {row.Account}");
+                dgvRow.Selected = true;
+                dgvReestr.FirstDisplayedScrollingRowIndex = dgvRow.Index;
+                dgvRow.Cells["colStatus"].Value = (int) RowStatus.Treated;
+                dgvReestr.Refresh();
+                DoSmth();
+                Thread.Sleep(2000);
+                WriteLog($"Сделали вид что все ОК");
+                dgvRow.Cells["colStatus"].Value = (int)RowStatus.Finished;
+                dgvReestr.Refresh();
+            }
+            WriteLog("Выгрузка успешно завершена");
         }
 
         private void btnLoadReestr_Click(object sender, EventArgs e)
         {
             LoadReestr();
+        }
+
+        private void chbIgnoreControlRow_CheckedChanged(object sender, EventArgs e)
+        {
+            CheckChanges();
         }
     }
 }
